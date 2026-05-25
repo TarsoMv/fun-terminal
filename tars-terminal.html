@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TARS // Terminal</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap');
+
+  :root {
+    --green: #00dd88;
+    --green-dim: #00aa66;
+    --green-faint: #003318;
+    --green-glow: rgba(0, 210, 130, 0.18);
+    --amber: #cc8800;
+    --red: #cc3333;
+    --bg: #050a05;
+    --bg2: #080e08;
+    --border: #00dd8828;
+    --font: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    font-family: var(--font);
+  }
+
+  /* Noise overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 1000;
+    opacity: 0.35;
+  }
+
+  /* Scanlines */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  .monitor-wrap {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+
+  .monitor {
+    width: 100%;
+    max-width: 860px;
+    height: calc(100vh - 32px);
+    max-height: 700px;
+    background: var(--bg);
+    border: 1.5px solid var(--border);
+    border-radius: 12px;
+    box-shadow:
+      0 0 0 1px #001108,
+      0 0 20px rgba(0,200,120,0.06),
+      0 0 50px rgba(0,200,120,0.03),
+      inset 0 0 60px rgba(0,0,0,0.6);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* CRT vignette */
+  .monitor::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.7) 100%);
+    pointer-events: none;
+    z-index: 10;
+    border-radius: 12px;
+  }
+
+  /* Subtle phosphor glow on screen */
+  .monitor::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 40%, rgba(0,255,153,0.03) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  .titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px 8px;
+    border-bottom: 1px solid #00ff9918;
+    background: #020702;
+    flex-shrink: 0;
+  }
+
+  .titlebar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+  }
+  .dot-r { background: #ff5f56; box-shadow: 0 0 6px #ff5f5688; }
+  .dot-y { background: #ffbd2e; box-shadow: 0 0 6px #ffbd2e88; }
+  .dot-g { background: #27c93f; box-shadow: 0 0 6px #27c93f88; }
+
+  .titlebar-title {
+    color: var(--green-dim);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .titlebar-right {
+    font-size: 10px;
+    color: #00ff9930;
+    letter-spacing: 1px;
+  }
+
+  .terminal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 8px;
+    position: relative;
+    scroll-behavior: smooth;
+  }
+
+  .terminal-body::-webkit-scrollbar { width: 4px; }
+  .terminal-body::-webkit-scrollbar-track { background: transparent; }
+  .terminal-body::-webkit-scrollbar-thumb { background: #00ff9930; border-radius: 2px; }
+
+  .output-line {
+    color: var(--green);
+    font-size: 13.5px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-shadow: 0 0 4px var(--green-glow);
+  }
+
+  .output-line.dim { color: var(--green-dim); opacity: 0.65; }
+  .output-line.cmd { color: #aaa; opacity: 0.45; }
+  .output-line.err { color: var(--red); text-shadow: 0 0 5px rgba(200,50,50,0.25); }
+  .output-line.amber { color: var(--amber); text-shadow: 0 0 5px rgba(200,130,0,0.25); }
+  .output-line.header { color: var(--green); font-weight: 700; letter-spacing: 1px; }
+  .output-line.empty { height: 10px; }
+  .output-line.ascii {
+    color: var(--green);
+    font-size: 10px;
+    line-height: 1.25;
+    opacity: 0.7;
+    text-shadow: 0 0 6px var(--green-glow);
+  }
+  .output-line.hack { color: #00bb77; text-shadow: 0 0 4px rgba(0,180,100,0.2); }
+
+  .prompt-line {
+    display: flex;
+    align-items: center;
+    padding: 4px 0 16px;
+    gap: 0;
+  }
+
+  .prompt-symbol {
+    color: var(--green);
+    font-size: 13.5px;
+    font-weight: 700;
+    text-shadow: 0 0 5px var(--green-glow);
+    flex-shrink: 0;
+    user-select: none;
+  }
+
+  #cmd-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--green);
+    font-family: var(--font);
+    font-size: 13.5px;
+    width: 100%;
+    caret-color: transparent;
+    text-shadow: 0 0 4px var(--green-glow);
+    margin-left: 6px;
+  }
+
+  .fake-cursor {
+    display: inline-block;
+    width: 8px;
+    height: 15px;
+    background: var(--green);
+    margin-left: 1px;
+    animation: blink 1s step-end infinite;
+    box-shadow: 0 0 5px var(--green-glow);
+    vertical-align: text-bottom;
+    flex-shrink: 0;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* Status bar */
+  .statusbar {
+    padding: 6px 20px;
+    border-top: 1px solid #00ff9912;
+    background: #020702;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .status-left, .status-right {
+    font-size: 10px;
+    color: #00ff9940;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .status-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+    margin-right: 6px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* Boot flicker */
+  @keyframes flicker {
+    0%   { opacity: 0.85; }
+    5%   { opacity: 1; }
+    10%  { opacity: 0.88; }
+    15%  { opacity: 1; }
+    50%  { opacity: 1; }
+    80%  { opacity: 0.95; }
+    90%  { opacity: 1; }
+    100% { opacity: 1; }
+  }
+
+  .monitor { animation: flicker 0.5s ease-in-out 0.1s both; }
+
+  /* Typing cursor in animation */
+  .typing-cursor {
+    display: inline-block;
+    animation: blink 0.6s step-end infinite;
+    color: var(--green);
+  }
+
+  @media (max-width: 600px) {
+    .monitor-wrap { padding: 8px; }
+    .monitor { max-height: none; height: calc(100vh - 16px); border-radius: 8px; }
+    .output-line, #cmd-input, .prompt-symbol { font-size: 12px; }
+    .output-line.ascii { font-size: 7px; }
+    .terminal-body { padding: 12px 14px 8px; }
+  }
+
+  /* Neofetch layout */
+  .neofetch-block {
+    display: flex;
+    gap: 28px;
+    align-items: flex-start;
+    padding: 4px 0;
+    flex-wrap: wrap;
+  }
+
+  .nf-left {
+    flex-shrink: 0;
+  }
+
+  .nf-ascii {
+    font-size: 11px;
+    line-height: 1.22;
+    color: var(--green);
+    opacity: 0.82;
+    white-space: pre;
+    font-family: var(--font);
+    text-shadow: 0 0 3px var(--green-glow);
+  }
+
+  .nf-right {
+    padding-top: 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 220px;
+  }
+
+  .nf-info-row {
+    font-size: 13px;
+    line-height: 1.65;
+    font-family: var(--font);
+    white-space: nowrap;
+  }
+
+  .nf-label {
+    color: var(--green);
+    font-weight: 700;
+    text-shadow: 0 0 4px var(--green-glow);
+  }
+
+  .nf-value {
+    color: #c8f5e0;
+    opacity: 0.85;
+  }
+
+  .nf-user {
+    color: var(--green);
+    font-weight: 700;
+    font-size: 14px;
+    text-shadow: 0 0 6px var(--green-glow);
+  }
+
+  .nf-sep {
+    color: var(--green-dim);
+    opacity: 0.5;
+    font-size: 12px;
+  }
+
+  .nf-empty { height: 6px; }
+
+  .nf-colors {
+    font-size: 13px;
+    letter-spacing: 2px;
+    background: linear-gradient(
+      90deg,
+      #1a1a2e 0%,  #16213e 12.5%,
+      #0f3460 25%, #533483 37.5%,
+      #00dd88 50%, #00aa66 62.5%,
+      #007744 75%, #004422 87.5%
+    );
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  @media (max-width: 600px) {
+    .neofetch-block { flex-direction: column; gap: 10px; }
+    .nf-ascii { font-size: 7.5px; }
+    .nf-info-row { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="monitor-wrap">
+  <div class="monitor" id="monitor">
+    <div class="titlebar">
+      <div class="titlebar-left">
+        <div class="dot dot-r"></div>
+        <div class="dot dot-y"></div>
+        <div class="dot dot-g"></div>
+      </div>
+      <span class="titlebar-title">TARS // TERMINAL v2.0.1</span>
+      <span class="titlebar-right" id="clock">--:--:--</span>
+    </div>
+
+    <div class="terminal-body" id="terminal">
+      <!-- output goes here -->
+      <div class="prompt-line" id="prompt-line" style="display:none;">
+        <span class="prompt-symbol">~$&nbsp;</span>
+        <input type="text" id="cmd-input" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" />
+        <div class="fake-cursor" id="fake-cursor"></div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span class="status-left"><span class="status-dot"></span>sistema online</span>
+      <span class="status-right" id="status-right">TARS@LOCAL</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const terminal = document.getElementById('terminal');
+const promptLine = document.getElementById('prompt-line');
+const cmdInput = document.getElementById('cmd-input');
+const fakeCursor = document.getElementById('fake-cursor');
+
+// Clock
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('pt-BR', { hour12: false });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Audio context for keyclick
+let audioCtx = null;
+function playClick() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.03);
+    gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + 0.05);
+  } catch(e) {}
+}
+
+// Insert line
+function addLine(text, cls = '', insertBefore = null) {
+  const div = document.createElement('div');
+  div.className = 'output-line' + (cls ? ' ' + cls : '');
+  div.textContent = text;
+  if (insertBefore) {
+    terminal.insertBefore(div, insertBefore);
+  } else {
+    terminal.insertBefore(div, promptLine);
+  }
+  return div;
+}
+
+function scrollBottom() {
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+// Boot sequence
+const ASCII = `
+ ████████╗ █████╗ ██████╗ ███████╗
+    ██╔══╝██╔══██╗██╔══██╗██╔════╝
+    ██║   ███████║██████╔╝███████╗ 
+    ██║   ██╔══██║██╔══██╗╚════██║
+    ██║   ██║  ██║██║  ██║███████║
+    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝`.trimStart();
+
+const bootLines = [
+  { text: ASCII, cls: 'ascii', delay: 0 },
+  { text: '', cls: 'empty', delay: 120 },
+  { text: '> Bem-vindo ao terminal de Tars', cls: '', delay: 200 },
+  { text: '> Inicializando sistema...', cls: 'dim', delay: 600 },
+  { text: '> Nome: Tars', cls: '', delay: 1100 },
+  { text: '> Status: Disponível para projetos', cls: 'amber', delay: 1600 },
+  { text: '> Digite \'help\' para comandos disponíveis.', cls: 'dim', delay: 2100 },
+  { text: '', cls: 'empty', delay: 2600 },
+];
+
+let bootDone = false;
+
+function typeLine(text, cls, callback) {
+  const div = document.createElement('div');
+  div.className = 'output-line' + (cls ? ' ' + cls : '');
+  terminal.insertBefore(div, promptLine);
+  scrollBottom();
+
+  if (cls === 'ascii' || cls === 'empty') {
+    div.textContent = text;
+    scrollBottom();
+    if (callback) callback();
+    return;
+  }
+
+  let i = 0;
+  const span = document.createElement('span');
+  div.appendChild(span);
+  const cursor = document.createElement('span');
+  cursor.className = 'typing-cursor';
+  cursor.textContent = '▋';
+  div.appendChild(cursor);
+
+  const interval = setInterval(() => {
+    span.textContent += text[i];
+    i++;
+    scrollBottom();
+    if (i >= text.length) {
+      clearInterval(interval);
+      cursor.remove();
+      if (callback) callback();
+    }
+  }, 28);
+}
+
+function runBoot(index) {
+  if (index >= bootLines.length) {
+    bootDone = true;
+    promptLine.style.display = 'flex';
+    cmdInput.focus();
+    scrollBottom();
+    return;
+  }
+
+  const item = bootLines[index];
+  const doIt = () => typeLine(item.text, item.cls, () => runBoot(index + 1));
+
+  if (index === 0) {
+    doIt();
+  } else {
+    const prev = bootLines[index - 1];
+    const delay = item.delay - prev.delay;
+    setTimeout(doIt, delay);
+  }
+}
+
+runBoot(0);
+
+// Keep cursor in sync
+cmdInput.addEventListener('input', () => {
+  // hide native cursor, show fake one at end
+  fakeCursor.style.display = 'inline-block';
+});
+
+cmdInput.addEventListener('focus', () => {
+  fakeCursor.style.display = 'inline-block';
+});
+
+// Commands
+const COMMANDS = {
+  help() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '╔══════════════════════════════════════╗', cls: 'dim' },
+      { text: '║         COMANDOS DISPONÍVEIS          ║', cls: 'header' },
+      { text: '╚══════════════════════════════════════╝', cls: 'dim' },
+      { text: '  neofetch           → Info do sistema (estiloso)', cls: '' },
+      { text: '  sobre              → Informações sobre Tars', cls: '' },
+      { text: '  contato            → Dados de contato', cls: '' },
+      { text: '  projetos           → Lista de projetos', cls: '' },
+      { text: '  social             → Redes sociais', cls: '' },
+      { text: '  clear              → Limpar terminal', cls: '' },
+      { text: '  ── hacking tools ──────────────────', cls: 'dim' },
+      { text: '  nmap localhost     → Scan de portas local', cls: 'hack' },
+      { text: '  nmap <ip>          → Scan de IP externo', cls: 'hack' },
+      { text: '  whoami             → Identificação do usuário', cls: 'hack' },
+      { text: '  ifconfig           → Interfaces de rede', cls: 'hack' },
+      { text: '  sudo rm -rf /      → Não. Só não.', cls: 'hack' },
+      { text: '  hack the planet    → ?????', cls: 'hack' },
+      { text: '  help               → Este menu', cls: '' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  neofetch() {
+    // Rendered via a special block — return sentinel
+    return [{ text: '__NEOFETCH__', cls: '__neofetch__' }];
+  },
+
+  sobre() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '▌ TARS // PERFIL DO SISTEMA', cls: 'header' },
+      { text: '────────────────────────────────────────', cls: 'dim' },
+      { text: '  Estudante de Sistemas de informação, com foco em Backend.', cls: '' },
+      { text: '  Desenvolvendo sistemas webs', cls: '' },
+      { text: '  para solucionar demandas de negócios', cls: '' },
+      { text: '', cls: 'empty' },
+      { text: '  Stack: Python · Java · MySQL', cls: 'dim' },
+      { text: '  Focus: APIs, FrontEnd', cls: 'dim' },
+      { text: '  Modo: Sempre aprendendo', cls: 'amber' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  contato() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '▌ CONTATO', cls: 'header' },
+      { text: '────────────────────────────────────────', cls: 'dim' },
+      { text: '  Email  →  tarsom27v@gmail.com', cls: '' },
+      { text: '  Web    → https://github.com/TarsoMv', cls: '' },
+      { text: '  PGP    →  0xDEADBEEF (just kidding)', cls: 'dim' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  projetos() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '▌ PROJETOS', cls: 'header' },
+      { text: '────────────────────────────────────────', cls: 'dim' },
+      { text: '  [01] URL-SHORTENER', cls: 'amber' },
+      { text: '       Um encurtador de URLs construído com Python, Flask e MySQL', cls: 'dim' },
+      { text: '       simples, rápido e com suporte a autenticação de usuários e estatísticas de acesso.', cls: 'dim' },
+      { text: '', cls: 'empty' },
+      { text: '  [02] GAMES REST API', cls: 'amber' },
+      { text: '       API RESTful para gerenciamento de jogos', cls: 'dim' },
+      { text: '       desenvolvida com Python + Flask, utilizando JWT para autenticação, MySQL como database', cls: 'dim' },
+      { text: '       e bcrypt para hashing de senhas.', cls: 'dim' },
+      { text: '', cls: 'empty' },
+      { text: '  [03] PS2 ALEXANDRIA', cls: 'amber' },
+      { text: '       Um website baseado no PlayStation 2, desenvolvida com HTML, CSS e JavaScript puro.', cls: 'dim' },
+      { text: '       O projeto consome a API da RAWG Video Games Database.', cls: 'dim' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  social() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '▌ REDES SOCIAIS', cls: 'header' },
+      { text: '────────────────────────────────────────', cls: 'dim' },
+      { text: '  GitHub    →  github.com/TarsoMv', cls: '' },
+      { text: '  LinkedIn  →  linkedin.com/in/tarso-maia-26ab55319', cls: '' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  'nmap localhost'() {
+    const ports = [
+      { port: 22,   service: 'ssh',     state: 'open' },
+      { port: 80,   service: 'http',    state: 'open' },
+      { port: 443,  service: 'https',   state: 'open' },
+      { port: 1337, service: 'h4x0r',   state: 'open' },
+      { port: 3000, service: 'dev-srv', state: 'open' },
+      { port: 4444, service: 'backdoor',state: 'open' },
+      { port: 8080, service: 'http-alt',state: 'filtered' },
+      { port: 9999, service: 'unknown', state: 'closed' },
+    ];
+    const lines = [
+      { text: '', cls: 'empty' },
+      { text: '▌ NMAP // Port Scanner v7.94', cls: 'header' },
+      { text: '────────────────────────────────────────', cls: 'dim' },
+      { text: '  Starting scan on localhost (127.0.0.1)', cls: 'hack' },
+      { text: '  Nmap scan report for localhost', cls: 'hack' },
+      { text: '  Host is up (0.000069s latency). Nice.', cls: 'dim' },
+      { text: '', cls: 'empty' },
+      { text: '  PORT      STATE     SERVICE', cls: 'header' },
+    ];
+    ports.forEach(p => {
+      const col = p.state === 'open' ? 'hack' : 'dim';
+      lines.push({ text: `  ${String(p.port).padEnd(9)} ${p.state.padEnd(9)} ${p.service}`, cls: col });
+    });
+    lines.push({ text: '', cls: 'empty' });
+    lines.push({ text: '  5 open ports, 1 filtered, 2 closed.', cls: 'hack' });
+    lines.push({ text: '  Porta 1337: h4x0r service detectado.', cls: 'amber' });
+    lines.push({ text: '  ALERTA: porta 4444 identificada como', cls: 'err' });
+    lines.push({ text: '  backdoor — provavelmente foi você msm.', cls: 'err' });
+    lines.push({ text: '', cls: 'empty' });
+    lines.push({ text: '  Conselho: feche essas portas.', cls: 'dim' });
+    lines.push({ text: '  (mas deixa a 1337, ela é estilosa)', cls: 'dim' });
+    lines.push({ text: '', cls: 'empty' });
+    return lines;
+  },
+
+  'nmap'() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '  Uso: nmap <ip> ou nmap localhost', cls: 'dim' },
+      { text: '  Tente: nmap localhost', cls: 'hack' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  whoami() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '▌ WHOAMI', cls: 'header' },
+      { text: '────────────────────────────────────────', cls: 'dim' },
+      { text: '  root', cls: 'amber' },
+      { text: '', cls: 'empty' },
+      { text: '  ...sim, root. Porque eu sei o que faço.', cls: 'dim' },
+      { text: '  (ou pelo menos faço parecer que sei)', cls: 'dim' },
+      { text: '', cls: 'empty' },
+      { text: '  uid=0(root) gid=0(root) groups=0(root),', cls: 'hack' },
+      { text: '  1337(hackers),31337(elite),42(universe)', cls: 'hack' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  ifconfig() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '▌ IFCONFIG // Interfaces de Rede', cls: 'header' },
+      { text: '────────────────────────────────────────', cls: 'dim' },
+      { text: '  eth0: flags=4163<UP,BROADCAST,RUNNING>', cls: 'hack' },
+      { text: '        inet 192.168.1.42  netmask /24', cls: 'hack' },
+      { text: '        ether de:ad:be:ef:13:37', cls: 'amber' },
+      { text: '', cls: 'empty' },
+      { text: '  tun0: flags=4305<UP,POINTOPOINT,RUNNING>', cls: 'hack' },
+      { text: '        inet 10.6.6.6  P-t-P: 10.6.6.1', cls: 'hack' },
+      { text: '        VPN ativa — ninguém te vê ;)', cls: 'dim' },
+      { text: '', cls: 'empty' },
+      { text: '  lo:   inet 127.0.0.1  loopback ativo', cls: 'dim' },
+      { text: '        só você mesmo acessa isso aqui.', cls: 'dim' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  'sudo rm -rf /'() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '  sudo rm -rf /', cls: 'err' },
+      { text: '', cls: 'empty' },
+      { text: '  Processando...', cls: 'amber' },
+      { text: '  Deletando /home/tars/projetos... ✓', cls: 'err' },
+      { text: '  Deletando /home/tars/segredos... ✓', cls: 'err' },
+      { text: '  Deletando /home/tars/memes... ✓', cls: 'err' },
+      { text: '', cls: 'empty' },
+      { text: '  BRINCADEIRA.', cls: 'header' },
+      { text: '  Você acha que eu deixaria isso rodar?', cls: 'dim' },
+      { text: '  Alias bloqueado. Tars não é bobo.', cls: 'dim' },
+      { text: '  (mas foi engraçado tentar)', cls: 'dim' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  'hack the planet'() {
+    return [
+      { text: '', cls: 'empty' },
+      { text: '  Iniciando sequência de dominação global...', cls: 'amber' },
+      { text: '', cls: 'empty' },
+      { text: '  [■■■■■■■■■■] 100% — hackeando NASA...', cls: 'hack' },
+      { text: '  [■■■■■■■■■■] 100% — invadindo Pentagon...', cls: 'hack' },
+      { text: '  [■■■■■■■■■■] 100% — acessando Matrix...', cls: 'hack' },
+      { text: '  [■■■■■■■■■■] 100% — controlando Skynet...', cls: 'hack' },
+      { text: '', cls: 'empty' },
+      { text: '  RESULTADO: Concluído com sucesso.', cls: 'header' },
+      { text: '  Planeta: hackeado.', cls: 'amber' },
+      { text: '  Consequências: nenhuma (provavelmente).', cls: 'dim' },
+      { text: '  Café: frio. Isso sim é o verdadeiro crime.', cls: 'dim' },
+      { text: '', cls: 'empty' },
+    ];
+  },
+
+  clear() {
+    // Remove all output lines
+    const lines = terminal.querySelectorAll('.output-line');
+    lines.forEach(l => l.remove());
+    return [];
+  },
+};
+
+function renderNeofetch() {
+  const ascii = [
+    '⠀⠀⠀⠀⠀⣀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⡢⡀⠀⠀⠀⠀',
+    '⠀⠀⠀⢄⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⠀⠀⠀⠀',
+    '⠀⠀⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠀⠀',
+    '⠀⢨⣿⡿⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣇⠀⠀',
+    '⠀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢀⠀',
+    '⢈⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⢹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⠀',
+    '⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⡇⠀⢸⢹⣿⣿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡧⠀',
+    '⠈⣿⣿⣿⣿⣿⠧⠯⠟⠿⠧⠀⠀⠀⠸⠿⠿⢼⣿⠿⢿⣟⣿⣿⣿⣿⣿⣇⠀',
+    '⠀⣿⣿⣿⣿⡿⢰⠺⣿⠉⠂⠀⠀⠀⠀⠀⠀⠚⣷⣶⠢⡀⢿⣿⣿⣿⡿⠉⠀',
+    '⢐⢻⣿⣏⠙⠇⠈⠒⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠝⠻⠥⠁⢰⡌⠹⠋⡀⡀⠀',
+    '⠀⠉⢻⣿⣦⡀⠐⠂⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠆⠄⠸⢃⣰⡀⠱⠀⠀',
+    '⠀⠀⠀⢹⣿⣿⡄⠀⠀⠀⠀⠀⠀⡀⡀⠀⠀⠀⠀⠀⠀⢀⣶⣿⣿⡟⠁⠀⠀',
+    '⠀⠀⠘⣸⢿⣿⣿⣦⡀⠀⠀⠀⠀⠠⠄⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣇⠀⠀⠀',
+    '⠀⠀⠀⠉⠞⠿⠛⠿⠿⢶⣄⠀⠀⠀⠀⠀⠀⠀⣠⡾⠿⠿⣿⣿⡿⠅⠀⠀⠀',
+    '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⣿⣿⣶⣤⣤⣤⡴⠊⠀⡧⠀⠀⣿⣿⣇⠀⠀⠀⠀',
+    '⠀⠀⠀⠀⠀⠀⠀⠀⣀⡞⠛⠿⣿⣿⠟⠋⠀⠀⠀⠱⣀⠈⣿⣿⡁⠀⠀⠀⠀',
+    '⠀⠀⠀⠀⠀⢠⡠⠔⠋⠀⠀⠀⠈⠁⠀⠀⠀⠀⠀⠀⠙⠲⣿⣧⠀⠀⠀⠀⠀',
+    '⢀⠔⠒⠀⠉⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡿⠀⠉⠚⠤⢔',
+  ];
+
+  const uptime = Math.floor(Math.random() * 99) + 1;
+  const info = [
+    { label: null,    value: 'tars@tarsmachine',        cls: 'nf-user' },
+    { label: null,    value: '─────────────────────',   cls: 'nf-sep' },
+    { label: 'OS',    value: 'EpicOS x86_64 v3.1.4',    cls: '' },
+    { label: 'Kernel',value: 'tars-6.6.6-elite',        cls: '' },
+    { label: 'Shell', value: 'tarssh 2.0.1',            cls: '' },
+    { label: 'Terminal', value: 'TARS Terminal v2.0.1', cls: '' },
+    { label: 'CPU',   value: 'TarsCore™ 9000 @ ∞GHz',   cls: '' },
+    { label: 'GPU',   value: 'NvidiaFake RTX 9090 Ti',  cls: '' },
+    { label: 'RAM',   value: '128GB / 128GB (lol)',      cls: '' },
+    { label: 'Uptime',value: `${uptime}d 13h 37m`,      cls: '' },
+    { label: null,    value: '',                         cls: 'nf-empty' },
+    { label: null,    value: '██ ██ ██ ██ ██ ██ ██ ██', cls: 'nf-colors' },
+  ];
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'neofetch-block';
+
+  const leftCol = document.createElement('div');
+  leftCol.className = 'nf-left';
+  ascii.forEach(row => {
+    const d = document.createElement('div');
+    d.className = 'nf-ascii';
+    d.textContent = row;
+    leftCol.appendChild(d);
+  });
+
+  const rightCol = document.createElement('div');
+  rightCol.className = 'nf-right';
+  info.forEach(item => {
+    const d = document.createElement('div');
+    d.className = 'nf-info-row' + (item.cls ? ' ' + item.cls : '');
+    if (item.label === null) {
+      d.textContent = item.value;
+    } else {
+      const lbl = document.createElement('span');
+      lbl.className = 'nf-label';
+      lbl.textContent = item.label + ': ';
+      const val = document.createElement('span');
+      val.className = 'nf-value';
+      val.textContent = item.value;
+      d.appendChild(lbl);
+      d.appendChild(val);
+    }
+    rightCol.appendChild(d);
+  });
+
+  wrapper.appendChild(leftCol);
+  wrapper.appendChild(rightCol);
+  terminal.insertBefore(wrapper, promptLine);
+  scrollBottom();
+}
+
+function executeCommand(raw) {
+  const cmd = raw.trim().toLowerCase();
+
+  // Echo command
+  addLine('~$ ' + raw, 'cmd');
+
+  if (!cmd) return;
+
+  playClick();
+
+  if (cmd === 'clear') {
+    COMMANDS.clear();
+    return;
+  }
+
+  // Check exact match first (handles multi-word keys)
+  if (COMMANDS[cmd]) {
+    const lines = COMMANDS[cmd]();
+    // Neofetch special rendering
+    if (lines.length === 1 && lines[0].cls === '__neofetch__') {
+      addLine('', 'empty');
+      renderNeofetch();
+      addLine('', 'empty');
+    } else {
+      lines.forEach(l => addLine(l.text, l.cls));
+    }
+
+  // nmap with arbitrary IP
+  } else if (cmd.startsWith('nmap ')) {
+    const target = raw.trim().slice(5).trim();
+    const isLocal = target === 'localhost' || target === '127.0.0.1';
+    if (isLocal) {
+      const lines = COMMANDS['nmap localhost']();
+      lines.forEach(l => addLine(l.text, l.cls));
+    } else {
+      const fakeIp = target.match(/^\d{1,3}(\.\d{1,3}){3}$/) ? target : '???';
+      [
+        { text: '', cls: 'empty' },
+        { text: `▌ NMAP // Scanning ${target}`, cls: 'header' },
+        { text: '────────────────────────────────────────', cls: 'dim' },
+        { text: `  Iniciando scan em ${fakeIp}...`, cls: 'hack' },
+        { text: '  Aguardando resposta do host...', cls: 'dim' },
+        { text: '', cls: 'empty' },
+        { text: '  Host status: up (latência suspeita)', cls: 'hack' },
+        { text: '  PORT    STATE   SERVICE', cls: 'header' },
+        { text: '  22      open    ssh', cls: 'hack' },
+        { text: '  80      open    http', cls: 'hack' },
+        { text: '  144     open    doom — preocupante', cls: 'err' },
+        { text: '', cls: 'empty' },
+        { text: '  Aviso: escanear IPs alheios sem permissão', cls: 'amber' },
+        { text: '  é crime em vários países.', cls: 'amber' },
+        { text: '  (mas aqui é só simulação, relaxa)', cls: 'dim' },
+        { text: '', cls: 'empty' },
+      ].forEach(l => addLine(l.text, l.cls));
+    }
+
+  } else {
+    addLine('', 'empty');
+    addLine('  Comando não reconhecido: \'' + cmd + '\'', 'err');
+    addLine('  Digite \'help\' para ajuda.', 'dim');
+    addLine('', 'empty');
+  }
+
+  scrollBottom();
+}
+
+// Command history
+let history = [];
+let histIdx = -1;
+
+cmdInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const val = cmdInput.value;
+    cmdInput.value = '';
+    histIdx = -1;
+
+    if (val.trim()) history.unshift(val);
+    if (history.length > 50) history.pop();
+
+    executeCommand(val);
+    scrollBottom();
+  }
+
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (histIdx < history.length - 1) {
+      histIdx++;
+      cmdInput.value = history[histIdx];
+    }
+  }
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    if (histIdx > 0) {
+      histIdx--;
+      cmdInput.value = history[histIdx];
+    } else {
+      histIdx = -1;
+      cmdInput.value = '';
+    }
+  }
+});
+
+// Keep focus on input
+document.addEventListener('click', () => {
+  if (bootDone) cmdInput.focus();
+});
+
+document.addEventListener('keydown', () => {
+  if (bootDone) cmdInput.focus();
+});
+
+// Tab autocomplete
+cmdInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const partial = cmdInput.value.trim().toLowerCase();
+    const allCmds = [...Object.keys(COMMANDS), 'nmap localhost', 'hack the planet', 'sudo rm -rf /'];
+    const unique = [...new Set(allCmds)];
+    const match = unique.find(c => c.startsWith(partial) && c !== partial);
+    if (match) cmdInput.value = match;
+  }
+});
+</script>
+</body>
+</html>
